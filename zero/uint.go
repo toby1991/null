@@ -1,4 +1,4 @@
-package null
+package zero
 
 import (
 	"bytes"
@@ -9,14 +9,14 @@ import (
 	"strconv"
 )
 
-// Uint is an nullable uint64.
-// It does not consider zero values to be null.
-// It will decode to null, not zero, if null.
+// Uint is a nullable uint64.
+// JSON marshals to zero if null.
+// Considered null to SQL if zero.
 type Uint struct {
 	sql.NullString
 }
 
-// NewInt creates a new Uint
+// NewUint creates a new Uint
 func NewUint(i uint64, valid bool) Uint {
 	return Uint{
 		NullString: sql.NullString{
@@ -26,17 +26,18 @@ func NewUint(i uint64, valid bool) Uint {
 	}
 }
 
-// IntFrom creates a new Uint that will always be valid.
+// UintFrom creates a new Uint that will be null if zero.
 func UintFrom(i uint64) Uint {
-	return NewUint(i, true)
+	return NewUint(i, i != 0)
 }
 
-// IntFromPtr creates a new Uint that be null if i is nil.
+// UintFromPtr creates a new Uint that be null if i is nil.
 func UintFromPtr(i *uint64) Uint {
 	if i == nil {
 		return NewUint(0, false)
 	}
-	return NewUint(*i, true)
+	n := NewUint(*i, true)
+	return n
 }
 
 // ValueOrZero returns the inner value if valid, otherwise zero.
@@ -49,8 +50,8 @@ func (i Uint) ValueOrZero() uint64 {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-// It supports number, string, and null input.
-// 0 will not be considered a null Uint.
+// It supports number and null input.
+// 0 will be considered a null Uint.
 func (i *Uint) UnmarshalJSON(data []byte) error {
 	if bytes.Equal(data, nullBytes) {
 		i.Valid = false
@@ -63,30 +64,30 @@ func (i *Uint) UnmarshalJSON(data []byte) error {
 		if errors.As(err, &typeError) {
 			// special case: accept string input
 			if typeError.Value != "string" {
-				return fmt.Errorf("null: JSON input is invalid type (need int or string): %w", err)
+				return fmt.Errorf("zero: JSON input is invalid type (need int or string): %w", err)
 			}
 			var str string
 			if err := json.Unmarshal(data, &str); err != nil {
-				return fmt.Errorf("null: couldn't unmarshal number string: %w", err)
+				return fmt.Errorf("zero: couldn't unmarshal number string: %w", err)
 			}
 			n, err := strconv.ParseUint(str, 10, 64)
 			if err != nil {
-				return fmt.Errorf("null: couldn't convert string to int: %w", err)
+				return fmt.Errorf("zero: couldn't convert string to int: %w", err)
 			}
 			i.String = strconv.FormatUint(n, 10)
-			i.Valid = true
+			i.Valid = n != 0
 			return nil
 		}
-		return fmt.Errorf("null: couldn't unmarshal JSON: %w", err)
+		return fmt.Errorf("zero: couldn't unmarshal JSON: %w", err)
 	}
 
 	i.String = strconv.FormatUint(_n, 10)
-	i.Valid = true
+	i.Valid = _n != 0
 	return nil
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler.
-// It will unmarshal to a null Uint if the input is blank.
+// It will unmarshal to a null Uint if the input is a blank, or zero.
 // It will return an error if the input is not an integer, blank, or "null".
 func (i *Uint) UnmarshalText(text []byte) error {
 	str := string(text)
@@ -99,27 +100,36 @@ func (i *Uint) UnmarshalText(text []byte) error {
 		return fmt.Errorf("null: couldn't convert string to int: %w", err)
 	}
 	i.String = strconv.FormatUint(n, 10)
-	i.Valid = true
-	return nil
+	i.Valid = n != 0
+	return err
 }
 
 // MarshalJSON implements json.Marshaler.
-// It will encode null if this Uint is null.
+// It will encode 0 if this Uint is null.
 func (i Uint) MarshalJSON() ([]byte, error) {
-	if !i.Valid {
-		return []byte("null"), nil
+	parseUint, err := strconv.ParseUint(i.String, 10, 64)
+	if err != nil {
+		return nil, err
 	}
-
-	return []byte(i.String), nil
+	n := parseUint
+	if !i.Valid {
+		n = 0
+	}
+	return []byte(strconv.FormatUint(n, 10)), nil
 }
 
 // MarshalText implements encoding.TextMarshaler.
-// It will encode a blank string if this Uint is null.
+// It will encode a zero if this Uint is null.
 func (i Uint) MarshalText() ([]byte, error) {
-	if !i.Valid {
-		return []byte{}, nil
+	parseUint, err := strconv.ParseUint(i.String, 10, 64)
+	if err != nil {
+		return nil, err
 	}
-	return []byte(i.String), nil
+	n := parseUint
+	if !i.Valid {
+		n = 0
+	}
+	return []byte(strconv.FormatUint(n, 10)), nil
 }
 
 // SetValid changes this Uint's value and also sets it to be non-null.
@@ -142,13 +152,16 @@ func (i Uint) Ptr() *uint64 {
 	return &parseUint
 }
 
-// IsZero returns true for invalid Ints, for future omitempty support (Go 1.4?)
-// A non-null Uint with a 0 value will not be considered zero.
+// IsZero returns true for null or zero Uints, for future omitempty support (Go 1.4?)
 func (i Uint) IsZero() bool {
-	return !i.Valid
+	n, err := strconv.ParseUint(i.String, 10, 64)
+	if err != nil {
+		return true
+	}
+	return !i.Valid || n == 0
 }
 
-// Equal returns true if both ints have the same value or are both null.
+// Equal returns true if both ints have the same value or are both either null or zero.
 func (i Uint) Equal(other Uint) bool {
-	return i.Valid == other.Valid && (!i.Valid || i.String == other.String)
+	return i.ValueOrZero() == other.ValueOrZero()
 }
